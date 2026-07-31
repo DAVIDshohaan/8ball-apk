@@ -8,8 +8,8 @@ import java.util.List;
 
 /**
  * Pure-Java computer vision engine.
- * Detects: table (green felt), balls (color blobs), pockets, cue direction.
- * No OpenCV dependency - keeps APK small and fast.
+ * Detects: table (TEAL felt), balls (color blobs), pockets, cue direction.
+ * HSV thresholds tuned from real 8 Ball Pool game sprites.
  */
 public class ScreenAnalyzer {
 
@@ -149,7 +149,7 @@ public class ScreenAnalyzer {
 
         float tableW = (float) (maxU - minU);
         float tableH = (float) (maxV - minV);
-        float ballR = tableW * 0.0112f; // ball diameter ~2.25% of table length
+        float ballR = tableW * 0.0112f;
         if (ballR < 1f) ballR = 1f;
 
         state.tableL = Math.min(corners[0][0], Math.min(corners[1][0], Math.min(corners[2][0], corners[3][0])));
@@ -222,7 +222,6 @@ public class ScreenAnalyzer {
         int minX = Math.max(0, (int) (cxb - searchR)), maxX = Math.min(outW, (int) (cxb + searchR));
         int minY = Math.max(0, (int) (cyb - searchR)), maxY = Math.min(outH, (int) (cyb + searchR));
 
-        // Primary: white dashed guide line pixels near cue ball
         long wx = 0, wy = 0;
         int wn = 0;
         for (int yy = minY; yy < maxY; yy++) {
@@ -232,7 +231,6 @@ public class ScreenAnalyzer {
                     float dx = xx - cxb, dy = yy - cyb;
                     float d2 = dx * dx + dy * dy;
                     if (d2 > ballR * ballR * 4f && d2 < searchR * searchR) {
-                        // weight: closer pixels matter more
                         float w = 1f / (1f + (float) Math.sqrt(d2) / ballR);
                         wx += xx * w; wy += yy * w; wn++;
                     }
@@ -246,8 +244,6 @@ public class ScreenAnalyzer {
                 return (float) Math.atan2(dy, dx);
             }
         }
-
-        // Fallback: none (stick fallback unreliable at this resolution)
         return Float.NaN;
     }
 
@@ -256,7 +252,6 @@ public class ScreenAnalyzer {
         state.dynamicLines.clear();
         if (state.balls.isEmpty()) return;
 
-        // Static: every ball -> best (unblocked) pocket
         for (GameState.Ball b : state.balls) {
             if (b == state.cueBall) continue;
             float[] pocket = bestPocket(state, b, ballR);
@@ -266,7 +261,6 @@ public class ScreenAnalyzer {
                     0x6618FFFF, 1.6f, false));
         }
 
-        // Dynamic: cue ray -> first hit ball -> ghost -> pocket
         if (state.cueBall != null && !Float.isNaN(state.cueAngle)) {
             float dx = (float) Math.cos(state.cueAngle);
             float dy = (float) Math.sin(state.cueAngle);
@@ -287,7 +281,6 @@ public class ScreenAnalyzer {
                 }
             }
 
-            // Cue ray visual (to ghost or full length)
             float rayLen = (hit != null) ? Math.max(tMin, ballR * 4) : (state.tableR - state.tableL);
             float endX = cxb + dx * rayLen;
             float endY = cyb + dy * rayLen;
@@ -301,7 +294,6 @@ public class ScreenAnalyzer {
                 state.ghostX = gx;
                 state.ghostY = gy;
                 state.targetBall = hit;
-                // target ball -> best pocket
                 float[] pocket = bestPocket(state, hit, ballR);
                 if (pocket != null) {
                     state.dynamicLines.add(new GameState.Line(
@@ -336,11 +328,15 @@ public class ScreenAnalyzer {
         return best;
     }
 
+    /**
+     * HSV color classification — thresholds from real 8 Ball Pool sprites.
+     * Ball sprites analyzed: ball0-ball15-hd.png, singletableLondon-hd.png
+     */
     private static int classify(float r, float g, float b) {
         float max = Math.max(r, Math.max(g, b));
         float min = Math.min(r, Math.min(g, b));
         float d = max - min;
-        float h, s = 0, v = max;
+        float h, s = 0, v = max / 255f;  // BUG FIX: normalize v to 0-1
         if (d > 0.0001f) {
             s = d / max;
             if (max == r) h = 60f * (((g - b) / d) % 6f);
@@ -351,22 +347,40 @@ public class ScreenAnalyzer {
             h = 0;
         }
 
-        // Felt green (distinctive dark-medium green)
-        if (s > 0.22f && s < 0.75f && v > 0.16f && v < 0.62f && h >= 85f && h <= 150f) return C_FELT;
+        // TEAL FELT (H≈196, S≈0.68, V≈0.72) — table background
+        // Range: H=170-205, S=0.25-0.90, V=0.35-0.95
+        if (h >= 170f && h <= 205f && s >= 0.25f && s <= 0.90f && v >= 0.35f && v <= 0.95f) return C_FELT;
 
-        if (v > 0.82f && s < 0.32f) return GameState.C_WHITE;
+        // WHITE (cue ball base H≈60 S≈0.13 V≈0.94, guide line, cushions)
+        if (v > 0.85f && s < 0.40f) return GameState.C_WHITE;
+
+        // BLACK (ball8, dark areas)
         if (v < 0.20f) return GameState.C_BLACK;
-        if (s < 0.28f) return C_NONE;
 
-        if (h >= 210f && h <= 255f && v > 0.30f) return GameState.C_BLUE;
-        if ((h <= 12f || h >= 345f) && v > 0.35f && s > 0.45f) return GameState.C_RED;
-        if (h >= 255f && h <= 300f && v > 0.30f) return GameState.C_PURPLE;
-        if (h >= 35f && h <= 80f && v > 0.55f && s > 0.40f) return GameState.C_YELLOW;
-        if (h >= 15f && h < 35f) {
-            if (v > 0.50f && s > 0.50f) return GameState.C_ORANGE;
-            if (v >= 0.25f && v <= 0.55f) return GameState.C_BROWN;
-        }
-        if (h >= 80f && h < 90f && v > 0.35f) return GameState.C_GREEN;
+        // Skip low-saturation pixels (gray UI, shadows)
+        if (s < 0.35f) return C_NONE;
+
+        // YELLOW (ball1 H≈41, ball9 H≈41): H=30-60
+        if (h >= 30f && h <= 60f && v > 0.70f) return GameState.C_YELLOW;
+
+        // ORANGE (ball5 H≈24, ball13 H≈24): H=15-30
+        if (h >= 15f && h < 30f && v > 0.60f) return GameState.C_ORANGE;
+
+        // BROWN/DARK RED (ball7 H≈11 V≈0.39, ball15 H≈10 V≈0.40): H<15, low V
+        if (h < 15f && v < 0.55f && s > 0.70f) return GameState.C_BROWN;
+
+        // RED (ball3 H≈356, ball11 H≈353): H=345-15 (wrap)
+        if ((h >= 345f || h < 15f) && v > 0.55f) return GameState.C_RED;
+
+        // GREEN (ball6 H≈129, ball14 H≈130): H=115-145
+        if (h >= 115f && h <= 145f && v > 0.30f) return GameState.C_GREEN;
+
+        // BLUE (ball2 H≈216, ball10 H≈216): H=205-230
+        if (h >= 205f && h <= 230f && v > 0.40f) return GameState.C_BLUE;
+
+        // PURPLE (ball4 H≈267, ball12 H≈267): H=250-285
+        if (h >= 250f && h <= 285f && v > 0.30f) return GameState.C_PURPLE;
+
         return C_NONE;
     }
 
