@@ -24,6 +24,8 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.util.DisplayMetrics;
+import android.view.Display;
+import android.view.Surface;
 import android.view.View;
 import android.view.WindowManager;
 
@@ -41,12 +43,14 @@ public class OverlayService extends Service {
 
     private Handler analyzeHandler;
     private OverlayView overlayView;
+    private DisplayManager displayManager;
+    private int capW = -1, capH = -1;
+    private int rotDeg = 0;
 
     private final ScreenAnalyzer analyzer = new ScreenAnalyzer();
     private final GameState state = new GameState();
     private boolean running = false;
 
-    private int screenW, screenH;
     private long frameCount = 0;
     private long fpsWindowStart = 0;
 
@@ -79,12 +83,9 @@ public class OverlayService extends Service {
             startForeground(1, createNotification());
         }
 
-        DisplayMetrics dm = new DisplayMetrics();
-        windowManager.getDefaultDisplay().getRealMetrics(dm);
-        screenW = dm.widthPixels;
-        screenH = dm.heightPixels;
-        int capW = Math.max(1, screenW / 2);
-        int capH = Math.max(1, screenH / 2);
+        displayManager = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+        createCapture();
+        displayManager.registerDisplayListener(displayListener, analyzeHandler);
 
         MediaProjectionManager mpm =
                 (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
@@ -102,11 +103,33 @@ public class OverlayService extends Service {
             }
         }, null);
 
-        imageReader = ImageReader.newInstance(capW, capH, PixelFormat.RGBA_8888, 2);
-
         analyzeThread = new HandlerThread("poolaim-analyzer");
         analyzeThread.start();
         analyzeHandler = new Handler(analyzeThread.getLooper());
+
+        overlayView = new OverlayView(this);
+        showOverlay();
+        running = true;
+        return START_STICKY;
+    }
+
+    /**
+     * Capture buffer always matches the CURRENT display rotation. If the game
+     * is landscape (1612x720) the capture is landscape (806x360); if portrait,
+     * portrait. This keeps the analyzer coordinates aligned with the physical
+     * screen so drawn lines land exactly on the game.
+     */
+    private void createCapture() {
+        Display display = windowManager.getDefaultDisplay();
+        DisplayMetrics dm = new DisplayMetrics();
+        display.getRealMetrics(dm);
+        capW = Math.max(1, dm.widthPixels / 2);
+        capH = Math.max(1, dm.heightPixels / 2);
+        int rot = display.getRotation();
+        rotDeg = (rot == Surface.ROTATION_90) ? 90 : (rot == Surface.ROTATION_180) ? 180
+                : (rot == Surface.ROTATION_270) ? 270 : 0;
+
+        imageReader = ImageReader.newInstance(capW, capH, PixelFormat.RGBA_8888, 2);
 
         virtualDisplay = mediaProjection.createVirtualDisplay(
                 "poolaim-capture", capW, capH, dm.densityDpi,
@@ -115,11 +138,42 @@ public class OverlayService extends Service {
 
         imageReader.setOnImageAvailableListener(frameListener, analyzeHandler);
 
-        overlayView = new OverlayView(this);
-        showOverlay();
-        running = true;
-        return START_STICKY;
+        synchronized (state) {
+            state.capW = capW;
+            state.capH = capH;
+            state.rotDeg = rotDeg;
+        }
     }
+
+    private void releaseCapture() {
+        if (imageReader != null) {
+            imageReader.setOnImageAvailableListener(null, null);
+            imageReader.close();
+            imageReader = null;
+        }
+        if (virtualDisplay != null) {
+            virtualDisplay.release();
+            virtualDisplay = null;
+        }
+    }
+
+    private final DisplayManager.DisplayListener displayListener = new DisplayManager.DisplayListener() {
+        @Override
+        public void onDisplayChanged(int displayId) {
+            if (displayId == Display.DEFAULT_DISPLAY && running) {
+                releaseCapture();
+                createCapture();
+            }
+        }
+
+        @Override
+        public void onDisplayAdded(int displayId) {
+        }
+
+        @Override
+        public void onDisplayRemoved(int displayId) {
+        }
+    };
 
     private final ImageReader.OnImageAvailableListener frameListener = reader -> {
         Image image = reader.acquireLatestImage();
@@ -182,18 +236,14 @@ public class OverlayService extends Service {
         serviceAlive = false;
         running = false;
         hideOverlay();
-        if (imageReader != null) imageReader.setOnImageAvailableListener(null, null);
-        if (virtualDisplay != null) {
-            virtualDisplay.release();
-            virtualDisplay = null;
+        if (displayManager != null) {
+            displayManager.unregisterDisplayListener(displayListener);
+            displayManager = null;
         }
+        releaseCapture();
         if (mediaProjection != null) {
             mediaProjection.stop();
             mediaProjection = null;
-        }
-        if (imageReader != null) {
-            imageReader.close();
-            imageReader = null;
         }
         if (analyzeThread != null) {
             analyzeThread.quitSafely();
@@ -311,8 +361,9 @@ public class OverlayService extends Service {
 
             // HUD text (small, top-left, does not block table)
             drawHint(canvas,
-                    String.format("fps:%d balls:%d %s",
-                            s.fps, s.balls.size(), s.aiming ? "AIM" : "IDLE"));
+                    String.format("%dx%d r%d %s %.0f%% balls:%d fps:%d %s",
+                            s.capW, s.capH, s.rotDeg, s.skin, s.feltPct,
+                            s.balls.size(), s.fps, s.aiming ? "AIM" : "IDLE"));
 
             invalidate();
         }

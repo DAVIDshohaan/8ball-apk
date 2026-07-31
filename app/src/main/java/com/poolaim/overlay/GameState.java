@@ -43,6 +43,11 @@ public class GameState {
 
     public boolean tableFound = false;
     public float analyzeH = 1f;
+    public int capW = 0;
+    public int capH = 0;
+    public int rotDeg = 0;
+    public String skin = "";
+    public float feltPct = 0;
     public float tableL, tableT, tableR, tableB;
     public float[][] pockets = new float[6][2];
     public List<Ball> balls = new ArrayList<>();

@@ -14,7 +14,12 @@ import java.util.List;
 public class ScreenAnalyzer {
 
     private static final int C_NONE = -1;
-    private static final int C_FELT = 9;
+
+    // Felt profiles (two-pass selection picks the dominant one per frame)
+    private static final int P_TEAL = 0, P_GREEN = 1, P_GOLD = 2, P_BLUE = 3, P_ADAPT = 4;
+    private static final String[] SKIN_NAMES = {"London", "Classic", "GoldenShot", "LuckyShot", "Custom"};
+    private int[] feltCounts = new int[5];
+    private int[] hueHist = new int[36];
 
     private int outW, outH;
     private byte[] ballMask;
@@ -63,30 +68,102 @@ public class ScreenAnalyzer {
             psy = planeY.getPixelStride(); psu = planeU.getPixelStride(); psv = planeV.getPixelStride();
         }
 
+        for (int i = 0; i < 5; i++) feltCounts[i] = 0;
+        for (int i = 0; i < 36; i++) hueHist[i] = 0;
+        long sampleCount = 0;
+
         for (int oy = 0; oy < outH; oy++) {
             int srcY = oy * imgH / outH;
             int oi = oy * outW;
             for (int ox = 0; ox < outW; ox++) {
                 int srcX = ox * imgW / outW;
-                int c;
+                int r, g, b;
                 if (rgba) {
                     int off = srcY * sr + srcX * pr;
-                    int r = brgba.get(off) & 0xff;
-                    int g = brgba.get(off + 1) & 0xff;
-                    int b = brgba.get(off + 2) & 0xff;
-                    c = classify(r, g, b);
+                    r = brgba.get(off) & 0xff;
+                    g = brgba.get(off + 1) & 0xff;
+                    b = brgba.get(off + 2) & 0xff;
                 } else {
                     int Y = (by.get(srcY * sy + srcX * psy) & 0xff);
                     int U = (bu.get((srcY / 2) * su + (srcX / 2) * psu) & 0xff) - 128;
                     int V = (bv.get((srcY / 2) * sv + (srcX / 2) * psv) & 0xff) - 128;
-                    float r = clamp(Y + 1.402f * V);
-                    float g = clamp(Y - 0.344f * U - 0.714f * V);
-                    float b = clamp(Y + 1.772f * U);
-                    c = classify(r, g, b);
+                    r = (int) clamp(Y + 1.402f * V);
+                    g = (int) clamp(Y - 0.344f * U - 0.714f * V);
+                    b = (int) clamp(Y + 1.772f * U);
                 }
-                feltMask[oi] = (c == C_FELT);
+                float max = Math.max(r, Math.max(g, b));
+                float min = Math.min(r, Math.min(g, b));
+                float d = max - min;
+                float hh, ss = 0, vv = max / 255f;
+                if (d > 0.0001f) {
+                    ss = d / max;
+                    if (max == r) hh = 60f * (((g - b) / d) % 6f);
+                    else if (max == g) hh = 60f * ((b - r) / d + 2f);
+                    else hh = 60f * ((r - g) / d + 4f);
+                    if (hh < 0) hh += 360f;
+                } else {
+                    hh = 0;
+                }
+                int p = matchProfile(hh, ss, vv);
+                if (p >= 0) feltCounts[p]++;
+                if (ss >= 0.50f && vv >= 0.20f && vv <= 0.95f) {
+                    hueHist[((int) (hh / 10f)) % 36]++;
+                    sampleCount++;
+                }
+                int c = classify(r, g, b);
                 whiteMask[oi] = (c == GameState.C_WHITE);
                 ballMask[oi] = (c >= 0 && c <= 8) ? (byte) (c + 1) : 0;
+                oi++;
+            }
+        }
+
+        // Pick the dominant felt profile this frame (balls can never dominate)
+        int bestBin = 0, bestCnt = 0;
+        for (int i = 0; i < 36; i++) {
+            if (hueHist[i] > bestCnt) { bestCnt = hueHist[i]; bestBin = i; }
+        }
+        feltCounts[P_ADAPT] = bestCnt;
+        int winner = 0;
+        for (int i = 1; i < 5; i++) {
+            if (feltCounts[i] > feltCounts[winner]) winner = i;
+        }
+        state.feltPct = sampleCount > 0 ? 100f * feltCounts[winner] / sampleCount : 0f;
+        state.skin = SKIN_NAMES[winner];
+
+        // --- 1b. Build felt mask from the winning profile ---
+        for (int oy = 0; oy < outH; oy++) {
+            int srcY = oy * imgH / outH;
+            int oi = oy * outW;
+            for (int ox = 0; ox < outW; ox++) {
+                int srcX = ox * imgW / outW;
+                int r, g, b;
+                if (rgba) {
+                    int off = srcY * sr + srcX * pr;
+                    r = brgba.get(off) & 0xff;
+                    g = brgba.get(off + 1) & 0xff;
+                    b = brgba.get(off + 2) & 0xff;
+                } else {
+                    int Y = (by.get(srcY * sy + srcX * psy) & 0xff);
+                    int U = (bu.get((srcY / 2) * su + (srcX / 2) * psu) & 0xff) - 128;
+                    int V = (bv.get((srcY / 2) * sv + (srcX / 2) * psv) & 0xff) - 128;
+                    r = (int) clamp(Y + 1.402f * V);
+                    g = (int) clamp(Y - 0.344f * U - 0.714f * V);
+                    b = (int) clamp(Y + 1.772f * U);
+                }
+                float max = Math.max(r, Math.max(g, b));
+                float min = Math.min(r, Math.min(g, b));
+                float d = max - min;
+                float hh, ss = 0, vv = max / 255f;
+                if (d > 0.0001f) {
+                    ss = d / max;
+                    if (max == r) hh = 60f * (((g - b) / d) % 6f);
+                    else if (max == g) hh = 60f * ((b - r) / d + 2f);
+                    else hh = 60f * ((r - g) / d + 4f);
+                    if (hh < 0) hh += 360f;
+                } else {
+                    hh = 0;
+                }
+                feltMask[oi] = matchesProfileIdx(winner, hh, ss, vv, bestBin);
                 oi++;
             }
         }
@@ -493,6 +570,35 @@ public class ScreenAnalyzer {
     }
 
     /**
+     * Felt profile matching. Ranges measured from the original game APK
+     * (singletableLondon/GoldenShot/LuckyShot textures) and live match
+     * screenshots (Classic table RGB(0,144,64) -> H=147).
+     */
+    private static int matchProfile(float h, float s, float v) {
+        if (v < 0.20f || v > 0.96f || s < 0.25f) return -1;
+        // TEAL London (Hmed=196, Smed=0.72, Vmed=0.72)
+        if (h >= 170f && h <= 205f && s >= 0.25f && s <= 0.90f && v >= 0.35f) return P_TEAL;
+        // GREEN Classic match table (H=147, S~1.0, V 0.22-0.95); lower bound 146
+        // so dark-green ball pixels (H<=145) survive ball detection
+        if (h >= 146f && h <= 168f && s >= 0.55f && v >= 0.22f) return P_GREEN;
+        // GOLD GoldenShot event table (Hmed=38, Smed=0.87, Vmed=0.79)
+        if (h >= 28f && h <= 60f && s >= 0.65f && v >= 0.50f) return P_GOLD;
+        // BLUE LuckyShot event table (Hmed=226, Smed=0.91, Vmed=0.54)
+        if (h >= 205f && h <= 238f && s >= 0.55f && v >= 0.30f) return P_BLUE;
+        return -1;
+    }
+
+    private static boolean matchesProfileIdx(int profile, float h, float s, float v, int bestBin) {
+        if (profile == P_ADAPT) {
+            float center = bestBin * 10f + 5f;
+            float dh = Math.abs(h - center);
+            if (dh > 180f) dh = 360f - dh;
+            return dh <= 10f && s >= 0.50f && v >= 0.20f && v <= 0.95f;
+        }
+        return matchProfile(h, s, v) == profile;
+    }
+
+    /**
      * HSV color classification — thresholds from real 8 Ball Pool sprites.
      * Ball sprites analyzed: ball0-ball15-hd.png, singletableLondon-hd.png
      */
@@ -500,7 +606,7 @@ public class ScreenAnalyzer {
         float max = Math.max(r, Math.max(g, b));
         float min = Math.min(r, Math.min(g, b));
         float d = max - min;
-        float h, s = 0, v = max / 255f;  // BUG FIX: normalize v to 0-1
+        float h, s = 0, v = max / 255f;
         if (d > 0.0001f) {
             s = d / max;
             if (max == r) h = 60f * (((g - b) / d) % 6f);
@@ -510,14 +616,6 @@ public class ScreenAnalyzer {
         } else {
             h = 0;
         }
-
-        // TEAL FELT (H≈196, S≈0.68, V≈0.72) — menu/lobby table
-        if (h >= 170f && h <= 205f && s >= 0.25f && s <= 0.90f && v >= 0.35f && v <= 0.95f) return C_FELT;
-
-        // FELT GREEN (H≈140-150, S≈1.0, V≈0.3-0.8) — actual match table
-        // measured from live match screenshot: RGB(0,144,64) -> H≈147
-        // lower bound kept at 146 so dark-green ball pixels (H≤145) survive
-        if (h >= 146f && h <= 168f && s >= 0.55f && v >= 0.22f && v <= 0.95f) return C_FELT;
 
         // WHITE (cue ball base H≈60 S≈0.13 V≈0.94, guide line, cushions)
         if (v > 0.85f && s < 0.40f) return GameState.C_WHITE;
