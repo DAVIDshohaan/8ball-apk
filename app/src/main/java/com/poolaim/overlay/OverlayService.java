@@ -244,17 +244,30 @@ public class OverlayService extends Service {
                 linePaint.setColor(l.argb);
                 linePaint.setStrokeWidth(Math.max(1f, l.width * sx));
                 linePaint.setStyle(Paint.Style.STROKE);
+                linePaint.setPathEffect(l.blocked ? new DashPathEffect(new float[]{8f, 8f}, 0) : null);
                 canvas.drawLine(l.x1 * sx, l.y1 * sy, l.x2 * sx, l.y2 * sy, linePaint);
+                linePaint.setPathEffect(null);
             }
 
-            // Dynamic lines: cue ray + target path
+            // Dynamic lines: cue ray + target path + bank reflections
             for (GameState.Line l : s.dynamicLines) {
                 linePaint.setColor(l.argb);
                 linePaint.setStrokeWidth(Math.max(1.5f, l.width * sx));
                 linePaint.setStyle(Paint.Style.STROKE);
-                linePaint.setPathEffect(l.dashed ? new DashPathEffect(new float[]{26f, 18f}, 0) : null);
+                linePaint.setPathEffect(l.dashed || l.blocked ? new DashPathEffect(new float[]{20f, 14f}, 0) : null);
                 canvas.drawLine(l.x1 * sx, l.y1 * sy, l.x2 * sx, l.y2 * sy, linePaint);
                 linePaint.setPathEffect(null);
+            }
+
+            // Ball markers & Stripe indicators
+            for (GameState.Ball b : s.balls) {
+                if (b == s.cueBall) continue;
+                if (b.isStripe) {
+                    fillPaint.setStyle(Paint.Style.STROKE);
+                    fillPaint.setColor(Color.argb(220, 255, 255, 255));
+                    fillPaint.setStrokeWidth(1.8f);
+                    canvas.drawCircle(b.x * sx, b.y * sy, b.r * sx, fillPaint);
+                }
             }
 
             // Ghost ball
@@ -271,8 +284,8 @@ public class OverlayService extends Service {
             if (s.targetBall != null) {
                 float br = s.targetBall.r * sx;
                 linePaint.setStyle(Paint.Style.STROKE);
-                linePaint.setColor(Color.argb(255, 0, 255, 136));
-                linePaint.setStrokeWidth(3f);
+                linePaint.setColor(s.targetBall.isStripe ? Color.argb(255, 255, 180, 0) : Color.argb(255, 0, 255, 136));
+                linePaint.setStrokeWidth(3.5f);
                 canvas.drawCircle(s.targetBall.x * sx, s.targetBall.y * sy, br + 3f, linePaint);
             }
 

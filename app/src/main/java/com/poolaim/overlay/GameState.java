@@ -17,8 +17,12 @@ public class GameState {
     public static class Ball {
         public float x, y, r;
         public int color;
+        public boolean isStripe;
+        public Ball(float x, float y, float r, int color, boolean isStripe) {
+            this.x = x; this.y = y; this.r = r; this.color = color; this.isStripe = isStripe;
+        }
         public Ball(float x, float y, float r, int color) {
-            this.x = x; this.y = y; this.r = r; this.color = color;
+            this(x, y, r, color, false);
         }
     }
 
@@ -27,9 +31,13 @@ public class GameState {
         public int argb;
         public float width;
         public boolean dashed;
-        public Line(float x1, float y1, float x2, float y2, int argb, float width, boolean dashed) {
+        public boolean blocked;
+        public Line(float x1, float y1, float x2, float y2, int argb, float width, boolean dashed, boolean blocked) {
             this.x1 = x1; this.y1 = y1; this.x2 = x2; this.y2 = y2;
-            this.argb = argb; this.width = width; this.dashed = dashed;
+            this.argb = argb; this.width = width; this.dashed = dashed; this.blocked = blocked;
+        }
+        public Line(float x1, float y1, float x2, float y2, int argb, float width, boolean dashed) {
+            this(x1, y1, x2, y2, argb, width, dashed, false);
         }
     }
 

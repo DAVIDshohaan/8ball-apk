@@ -194,7 +194,24 @@ public class ScreenAnalyzer {
             float cw = cl.maxX - cl.minX, ch = cl.maxY - cl.minY;
             if (cw > ballR * 5 || ch > ballR * 5) continue;
             float r = (float) Math.sqrt(cl.area / Math.PI);
-            GameState.Ball b = new GameState.Ball(cl.x, cl.y, r, cl.color);
+
+            // Stripe ball detection: check for white mask pixels near cluster center
+            boolean isStripe = false;
+            if (cl.color != GameState.C_WHITE && cl.color != GameState.C_BLACK) {
+                int whiteCnt = 0;
+                int sr = (int) Math.max(1, r * 0.85f);
+                for (int sy = Math.max(0, (int)(cl.y - sr)); sy <= Math.min(outH - 1, (int)(cl.y + sr)); sy++) {
+                    for (int sx = Math.max(0, (int)(cl.x - sr)); sx <= Math.min(outW - 1, (int)(cl.x + sr)); sx++) {
+                        float dx = sx - cl.x, dy = sy - cl.y;
+                        if (dx * dx + dy * dy <= sr * sr) {
+                            if (whiteMask[sy * outW + sx]) whiteCnt++;
+                        }
+                    }
+                }
+                if (whiteCnt >= 3) isStripe = true;
+            }
+
+            GameState.Ball b = new GameState.Ball(cl.x, cl.y, r, cl.color, isStripe);
             state.balls.add(b);
             if (cl.color == GameState.C_WHITE && (largestWhite == null || cl.area > largestWhite.r * largestWhite.r)) {
                 largestWhite = b;
@@ -247,18 +264,42 @@ public class ScreenAnalyzer {
         return Float.NaN;
     }
 
+    private boolean isPathBlocked(float x1, float y1, float x2, float y2, float ballR, List<GameState.Ball> balls, GameState.Ball ignoreA, GameState.Ball ignoreB) {
+        float dx = x2 - x1, dy = y2 - y1;
+        float len = (float) Math.hypot(dx, dy);
+        if (len < 0.001f) return false;
+        float ux = dx / len, uy = dy / len;
+        float threshold2 = (ballR * 1.85f) * (ballR * 1.85f);
+
+        for (GameState.Ball b : balls) {
+            if (b == ignoreA || b == ignoreB) continue;
+            float vx = b.x - x1, vy = b.y - y1;
+            float proj = vx * ux + vy * uy;
+            if (proj >= ballR * 1.2f && proj <= len - ballR * 1.2f) {
+                float perp2 = vx * vx + vy * vy - proj * proj;
+                if (perp2 <= threshold2) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private void computeLines(GameState state, float ballR) {
         state.staticLines.clear();
         state.dynamicLines.clear();
         if (state.balls.isEmpty()) return;
 
+        // Static lines: every ball -> best pocket
         for (GameState.Ball b : state.balls) {
             if (b == state.cueBall) continue;
             float[] pocket = bestPocket(state, b, ballR);
             if (pocket == null) continue;
+            boolean blocked = isPathBlocked(b.x, b.y, pocket[0], pocket[1], ballR, state.balls, b, null);
+            int color = blocked ? 0x44FF4444 : 0x6618FFFF;
             state.staticLines.add(new GameState.Line(
                     b.x, b.y, pocket[0], pocket[1],
-                    0x6618FFFF, 1.6f, false));
+                    color, 1.6f, false, blocked));
         }
 
         if (state.cueBall != null && !Float.isNaN(state.cueAngle)) {
@@ -284,9 +325,11 @@ public class ScreenAnalyzer {
             float rayLen = (hit != null) ? Math.max(tMin, ballR * 4) : (state.tableR - state.tableL);
             float endX = cxb + dx * rayLen;
             float endY = cyb + dy * rayLen;
+            boolean cueBlocked = (hit != null) && isPathBlocked(cxb, cyb, endX, endY, ballR, state.balls, state.cueBall, hit);
+
             state.dynamicLines.add(new GameState.Line(
                     cxb, cyb, endX, endY,
-                    0xCCFFE000, 2.5f, true));
+                    0xCCFFE000, 2.5f, true, cueBlocked));
 
             if (hit != null) {
                 float gx = cxb + dx * tMin;
@@ -296,11 +339,34 @@ public class ScreenAnalyzer {
                 state.targetBall = hit;
                 float[] pocket = bestPocket(state, hit, ballR);
                 if (pocket != null) {
+                    boolean targetBlocked = isPathBlocked(hit.x, hit.y, pocket[0], pocket[1], ballR, state.balls, hit, null);
+                    int targetColor = targetBlocked ? 0xCCFF3333 : 0xCC00FF88;
                     state.dynamicLines.add(new GameState.Line(
                             hit.x, hit.y, pocket[0], pocket[1],
-                            0xCC00FF88, 3f, false));
+                            targetColor, 3f, false, targetBlocked));
                 }
             } else {
+                // Bank shot reflection off cushion boundary
+                float minX = state.tableL + ballR, maxX = state.tableR - ballR;
+                float minY = state.tableT + ballR, maxY = state.tableB - ballR;
+                float tx = Float.MAX_VALUE, ty = Float.MAX_VALUE;
+                if (dx > 0) tx = (maxX - cxb) / dx;
+                else if (dx < 0) tx = (minX - cxb) / dx;
+                if (dy > 0) ty = (maxY - cyb) / dy;
+                else if (dy < 0) ty = (minY - cyb) / dy;
+
+                float tHit = Math.min(tx, ty);
+                if (tHit > 0 && tHit < 1000f) {
+                    float bounceX = cxb + dx * tHit;
+                    float bounceY = cyb + dy * tHit;
+                    float rdx = (tHit == tx) ? -dx : dx;
+                    float rdy = (tHit == ty) ? -dy : dy;
+
+                    state.dynamicLines.add(new GameState.Line(
+                            bounceX, bounceY, bounceX + rdx * (state.tableR - state.tableL) * 0.4f, bounceY + rdy * (state.tableR - state.tableL) * 0.4f,
+                            0xAAFF8800, 2f, true, false));
+                }
+
                 state.ghostX = -1;
                 state.ghostY = -1;
                 state.targetBall = null;
