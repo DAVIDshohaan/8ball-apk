@@ -37,6 +37,8 @@ public class OverlayService extends Service {
     private ImageReader imageReader;
     private VirtualDisplay virtualDisplay;
     private HandlerThread analyzeThread;
+    public static volatile boolean serviceAlive = false;
+
     private Handler analyzeHandler;
     private OverlayView overlayView;
 
@@ -51,6 +53,7 @@ public class OverlayService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        serviceAlive = true;
         windowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
         createNotificationChannel();
     }
@@ -176,6 +179,7 @@ public class OverlayService extends Service {
 
     @Override
     public void onDestroy() {
+        serviceAlive = false;
         running = false;
         hideOverlay();
         if (imageReader != null) imageReader.setOnImageAvailableListener(null, null);

@@ -30,6 +30,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        overlayActive = OverlayService.serviceAlive;
 
         btnStart = findViewById(R.id.btnStart);
         btnStop = findViewById(R.id.btnStop);
@@ -100,6 +101,8 @@ public class MainActivity extends AppCompatActivity {
                 }
                 overlayActive = true;
                 updateUI();
+                moveTaskToBack(true);
+                finish();
             }
         }
     }
