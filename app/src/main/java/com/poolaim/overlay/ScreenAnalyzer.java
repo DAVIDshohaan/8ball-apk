@@ -36,14 +36,14 @@ public class ScreenAnalyzer {
         }
 
         // --- 1. Downsample + classify pixels ---
-        Image.Plane py = image.getPlanes()[0];
-        Image.Plane pu = image.getPlanes()[1];
-        Image.Plane pv = image.getPlanes()[2];
-        ByteBuffer by = py.getBuffer();
-        ByteBuffer bu = pu.getBuffer();
-        ByteBuffer bv = pv.getBuffer();
-        int sy = py.getRowStride(), su = pu.getRowStride(), sv = pv.getRowStride();
-        int psy = py.getPixelStride(), psu = pu.getPixelStride(), psv = pv.getPixelStride();
+        Image.Plane planeY = image.getPlanes()[0];
+        Image.Plane planeU = image.getPlanes()[1];
+        Image.Plane planeV = image.getPlanes()[2];
+        ByteBuffer by = planeY.getBuffer();
+        ByteBuffer bu = planeU.getBuffer();
+        ByteBuffer bv = planeV.getBuffer();
+        int sy = planeY.getRowStride(), su = planeU.getRowStride(), sv = planeV.getRowStride();
+        int psy = planeY.getPixelStride(), psu = planeU.getPixelStride(), psv = planeV.getPixelStride();
 
         for (int oy = 0; oy < outH; oy++) {
             int srcY = oy * imgH / outH;
