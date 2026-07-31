@@ -53,6 +53,13 @@ public class OverlayService extends Service {
         super.onCreate();
         windowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
         createNotificationChannel();
+        // Must call startForeground() in onCreate() on Android 14+ (API 34+)
+        // to avoid SecurityException with mediaProjection foreground service type
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(1, createNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+        } else {
+            startForeground(1, createNotification());
+        }
     }
 
     @Override
@@ -68,12 +75,6 @@ public class OverlayService extends Service {
         if (resultCode == 0 || data == null) {
             stopSelf();
             return START_NOT_STICKY;
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1, createNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
-        } else {
-            startForeground(1, createNotification());
         }
 
         DisplayMetrics dm = new DisplayMetrics();
