@@ -98,8 +98,17 @@ public class ScreenAnalyzer {
             if (feltMask[i]) { cx += i % outW; cy += i / outW; n++; }
         }
         if (n < 400) {
-            state.tableFound = false;
-            state.balls.clear();
+            synchronized (state) {
+                state.tableFound = false;
+                state.balls = new ArrayList<>();
+                state.staticLines = new ArrayList<>();
+                state.dynamicLines = new ArrayList<>();
+                state.cueBall = null;
+                state.targetBall = null;
+                state.ghostX = -1;
+                state.ghostY = -1;
+                state.aiming = false;
+            }
             return state;
         }
         cx /= n; cy /= n;
@@ -140,25 +149,30 @@ public class ScreenAnalyzer {
         int longA = 0, longB = 0;
         if (e[0] > e[1]) { longA = 0; } else { longA = 1; }
         longB = (longA + 2) % 4;
+        float[][] newPockets = new float[6][2];
         for (int i = 0; i < 4; i++) {
-            state.pockets[i][0] = corners[i][0];
-            state.pockets[i][1] = corners[i][1];
+            newPockets[i][0] = corners[i][0];
+            newPockets[i][1] = corners[i][1];
         }
-        state.pockets[4][0] = (corners[longA][0] + corners[(longA + 1) % 4][0]) / 2;
-        state.pockets[4][1] = (corners[longA][1] + corners[(longA + 1) % 4][1]) / 2;
-        state.pockets[5][0] = (corners[longB][0] + corners[(longB + 1) % 4][0]) / 2;
-        state.pockets[5][1] = (corners[longB][1] + corners[(longB + 1) % 4][1]) / 2;
+        newPockets[4][0] = (corners[longA][0] + corners[(longA + 1) % 4][0]) / 2;
+        newPockets[4][1] = (corners[longA][1] + corners[(longA + 1) % 4][1]) / 2;
+        newPockets[5][0] = (corners[longB][0] + corners[(longB + 1) % 4][0]) / 2;
+        newPockets[5][1] = (corners[longB][1] + corners[(longB + 1) % 4][1]) / 2;
 
         float tableW = (float) (maxU - minU);
         float tableH = (float) (maxV - minV);
         float ballR = tableW * 0.0112f;
         if (ballR < 1f) ballR = 1f;
 
-        state.tableL = Math.min(corners[0][0], Math.min(corners[1][0], Math.min(corners[2][0], corners[3][0])));
-        state.tableT = Math.min(corners[0][1], Math.min(corners[1][1], Math.min(corners[2][1], corners[3][1])));
-        state.tableR = Math.max(corners[0][0], Math.max(corners[1][0], Math.max(corners[2][0], corners[3][0])));
-        state.tableB = Math.max(corners[0][1], Math.max(corners[1][1], Math.max(corners[2][1], corners[3][1])));
-        state.tableFound = true;
+        // Publish table geometry atomically (onDraw reads these fields)
+        synchronized (state) {
+            state.pockets = newPockets;
+            state.tableL = Math.min(corners[0][0], Math.min(corners[1][0], Math.min(corners[2][0], corners[3][0])));
+            state.tableT = Math.min(corners[0][1], Math.min(corners[1][1], Math.min(corners[2][1], corners[3][1])));
+            state.tableR = Math.max(corners[0][0], Math.max(corners[1][0], Math.max(corners[2][0], corners[3][0])));
+            state.tableB = Math.max(corners[0][1], Math.max(corners[1][1], Math.max(corners[2][1], corners[3][1])));
+            state.tableFound = true;
+        }
 
         // --- 4. Ball detection: flood fill on ball mask ---
         List<Cluster> clusters = new ArrayList<>();
@@ -191,11 +205,16 @@ public class ScreenAnalyzer {
 
         float expArea = (float) (Math.PI * ballR * ballR);
         int ballSearch = Math.max(2, (int) (ballR * 1.2f));
-        state.balls.clear();
+        List<GameState.Ball> newBalls = new ArrayList<>();
         GameState.Ball largestWhite = null;
         for (Cluster cl : clusters) {
             float cw = cl.maxX - cl.minX, ch = cl.maxY - cl.minY;
             if (cw > ballR * 3.5f || ch > ballR * 3.5f) continue;
+            // Reject UI elements outside the playing field (top/bottom bars,
+            // cushions) so they can never be mistaken for balls or the cue.
+            float margin = ballR * 1.5f;
+            if (cl.x < state.tableL - margin || cl.x > state.tableR + margin ||
+                cl.y < state.tableT - margin || cl.y > state.tableB + margin) continue;
 
             float r;
             boolean isStripe = false;
@@ -242,10 +261,13 @@ public class ScreenAnalyzer {
             }
 
             GameState.Ball b = new GameState.Ball(cl.x, cl.y, r, cl.color, isStripe);
-            state.balls.add(b);
+            newBalls.add(b);
             if (cl.color == GameState.C_WHITE && (largestWhite == null || cl.area > largestWhite.r * largestWhite.r)) {
                 largestWhite = b;
             }
+        }
+        synchronized (state) {
+            state.balls = newBalls;
         }
         state.cueBall = largestWhite;
 
@@ -348,9 +370,19 @@ public class ScreenAnalyzer {
     }
 
     private void computeLines(GameState state, float ballR) {
-        state.staticLines.clear();
-        state.dynamicLines.clear();
-        if (state.balls.isEmpty()) return;
+        List<GameState.Line> newStatic = new ArrayList<>();
+        List<GameState.Line> newDynamic = new ArrayList<>();
+        if (state.balls.isEmpty()) {
+            synchronized (state) {
+                state.staticLines = newStatic;
+                state.dynamicLines = newDynamic;
+                state.ghostX = -1;
+                state.ghostY = -1;
+                state.targetBall = null;
+                state.aiming = false;
+            }
+            return;
+        }
 
         // Static lines: every ball -> best pocket
         for (GameState.Ball b : state.balls) {
@@ -359,7 +391,7 @@ public class ScreenAnalyzer {
             if (pocket == null) continue;
             boolean blocked = isPathBlocked(b.x, b.y, pocket[0], pocket[1], ballR, state.balls, b, null);
             int color = blocked ? 0x44FF4444 : 0x6618FFFF;
-            state.staticLines.add(new GameState.Line(
+            newStatic.add(new GameState.Line(
                     b.x, b.y, pocket[0], pocket[1],
                     color, 1.6f, false, blocked));
         }
@@ -389,7 +421,7 @@ public class ScreenAnalyzer {
             float endY = cyb + dy * rayLen;
             boolean cueBlocked = (hit != null) && isPathBlocked(cxb, cyb, endX, endY, ballR, state.balls, state.cueBall, hit);
 
-            state.dynamicLines.add(new GameState.Line(
+            newDynamic.add(new GameState.Line(
                     cxb, cyb, endX, endY,
                     0xCCFFE000, 2.5f, true, cueBlocked));
 
@@ -403,7 +435,7 @@ public class ScreenAnalyzer {
                 if (pocket != null) {
                     boolean targetBlocked = isPathBlocked(hit.x, hit.y, pocket[0], pocket[1], ballR, state.balls, hit, null);
                     int targetColor = targetBlocked ? 0xCCFF3333 : 0xCC00FF88;
-                    state.dynamicLines.add(new GameState.Line(
+                    newDynamic.add(new GameState.Line(
                             hit.x, hit.y, pocket[0], pocket[1],
                             targetColor, 3f, false, targetBlocked));
                 }
@@ -424,7 +456,7 @@ public class ScreenAnalyzer {
                     float rdx = (tHit == tx) ? -dx : dx;
                     float rdy = (tHit == ty) ? -dy : dy;
 
-                    state.dynamicLines.add(new GameState.Line(
+                    newDynamic.add(new GameState.Line(
                             bounceX, bounceY, bounceX + rdx * (state.tableR - state.tableL) * 0.4f, bounceY + rdy * (state.tableR - state.tableL) * 0.4f,
                             0xAAFF8800, 2f, true, false));
                 }
@@ -439,6 +471,10 @@ public class ScreenAnalyzer {
             state.ghostX = -1;
             state.ghostY = -1;
             state.targetBall = null;
+        }
+        synchronized (state) {
+            state.staticLines = newStatic;
+            state.dynamicLines = newDynamic;
         }
     }
 
@@ -479,8 +515,9 @@ public class ScreenAnalyzer {
         if (h >= 170f && h <= 205f && s >= 0.25f && s <= 0.90f && v >= 0.35f && v <= 0.95f) return C_FELT;
 
         // FELT GREEN (H≈140-150, S≈1.0, V≈0.3-0.8) — actual match table
-        // measured from live match screenshot: RGB(0,144,64) -> H=140-150
-        if (h >= 141f && h <= 168f && s >= 0.55f && v >= 0.22f && v <= 0.95f) return C_FELT;
+        // measured from live match screenshot: RGB(0,144,64) -> H≈147
+        // lower bound kept at 146 so dark-green ball pixels (H≤145) survive
+        if (h >= 146f && h <= 168f && s >= 0.55f && v >= 0.22f && v <= 0.95f) return C_FELT;
 
         // WHITE (cue ball base H≈60 S≈0.13 V≈0.94, guide line, cushions)
         if (v > 0.85f && s < 0.40f) return GameState.C_WHITE;
@@ -503,8 +540,9 @@ public class ScreenAnalyzer {
         // RED (ball3 H≈356, ball11 H≈353): H=345-15 (wrap)
         if ((h >= 345f || h < 15f) && v > 0.55f) return GameState.C_RED;
 
-        // GREEN (ball6 H≈129, ball14 H≈130): H=110-140 (felt green starts at 141)
-        if (h >= 110f && h <= 140f && v > 0.30f) return GameState.C_GREEN;
+        // GREEN (ball6 H≈129, ball14 H≈130): H=100-145, v>0.24
+        // (dark green balls measured V=0.29-0.30 in live match; felt starts at 146)
+        if (h >= 100f && h <= 145f && v > 0.24f) return GameState.C_GREEN;
 
         // BLUE (ball2 H≈216, ball10 H≈216): H=205-230
         if (h >= 205f && h <= 230f && v > 0.40f) return GameState.C_BLUE;
