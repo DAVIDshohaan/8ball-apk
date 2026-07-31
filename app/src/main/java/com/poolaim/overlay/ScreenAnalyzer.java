@@ -21,6 +21,8 @@ public class ScreenAnalyzer {
     private boolean[] feltMask;
     private boolean[] whiteMask;
     private float lastCueAngle = Float.NaN;
+    private int cueMissFrames = 0;
+    private int[] stackBuf = new int[0];
 
     public GameState analyze(Image image, GameState state) {
         int imgW = image.getWidth();
@@ -160,7 +162,8 @@ public class ScreenAnalyzer {
 
         // --- 4. Ball detection: flood fill on ball mask ---
         List<Cluster> clusters = new ArrayList<>();
-        int[] stack = new int[total];
+        if (stackBuf.length < total) stackBuf = new int[total];
+        int[] stack = stackBuf;
         for (int i = 0; i < total; i++) {
             if (ballMask[i] > 0) {
                 int color = ballMask[i] - 1;
@@ -187,28 +190,55 @@ public class ScreenAnalyzer {
         }
 
         float expArea = (float) (Math.PI * ballR * ballR);
+        int ballSearch = Math.max(2, (int) (ballR * 1.2f));
         state.balls.clear();
         GameState.Ball largestWhite = null;
         for (Cluster cl : clusters) {
-            if (cl.area < expArea * 0.35f || cl.area > expArea * 4f) continue;
             float cw = cl.maxX - cl.minX, ch = cl.maxY - cl.minY;
-            if (cw > ballR * 5 || ch > ballR * 5) continue;
-            float r = (float) Math.sqrt(cl.area / Math.PI);
+            if (cw > ballR * 3.5f || ch > ballR * 3.5f) continue;
 
-            // Stripe ball detection: check for white mask pixels near cluster center
+            float r;
             boolean isStripe = false;
             if (cl.color != GameState.C_WHITE && cl.color != GameState.C_BLACK) {
+                // Stripe balls: white body surrounds the colored band.
+                // Search the FULL ball extent (not just the band radius), else
+                // the white body is never found and the band alone fails the
+                // area filter below.
                 int whiteCnt = 0;
-                int searchRadius = (int) Math.max(1, r * 0.85f);
-                for (int stripeY = Math.max(0, (int)(cl.y - searchRadius)); stripeY <= Math.min(outH - 1, (int)(cl.y + searchRadius)); stripeY++) {
-                    for (int stripeX = Math.max(0, (int)(cl.x - searchRadius)); stripeX <= Math.min(outW - 1, (int)(cl.x + searchRadius)); stripeX++) {
+                float whiteMaxD2 = 0;
+                int top = Math.max(0, (int) (cl.y - ballSearch));
+                int bottom = Math.min(outH - 1, (int) (cl.y + ballSearch));
+                int left = Math.max(0, (int) (cl.x - ballSearch));
+                int right = Math.min(outW - 1, (int) (cl.x + ballSearch));
+                for (int stripeY = top; stripeY <= bottom; stripeY++) {
+                    for (int stripeX = left; stripeX <= right; stripeX++) {
                         float dx = stripeX - cl.x, dy = stripeY - cl.y;
-                        if (dx * dx + dy * dy <= searchRadius * searchRadius) {
-                            if (whiteMask[stripeY * outW + stripeX]) whiteCnt++;
+                        float d2 = dx * dx + dy * dy;
+                        if (d2 <= ballSearch * ballSearch && whiteMask[stripeY * outW + stripeX]) {
+                            whiteCnt++;
+                            if (d2 > whiteMaxD2) whiteMaxD2 = d2;
                         }
                     }
                 }
-                if (whiteCnt >= 3) isStripe = true;
+                if (whiteCnt >= 4) {
+                    // Ball radius = extent of the white body, not the band.
+                    // Band centroid ~ ball center (band is symmetric).
+                    float fullR = (float) Math.sqrt(whiteMaxD2);
+                    if (fullR >= ballR * 0.7f && fullR <= ballR * 1.7f) {
+                        isStripe = true;
+                        r = fullR;
+                    } else {
+                        r = (float) Math.sqrt(cl.area / Math.PI);
+                    }
+                } else {
+                    r = (float) Math.sqrt(cl.area / Math.PI);
+                }
+            } else {
+                r = (float) Math.sqrt(cl.area / Math.PI);
+            }
+
+            if (!isStripe) {
+                if (cl.area < expArea * 0.35f || cl.area > expArea * 4f) continue;
             }
 
             GameState.Ball b = new GameState.Ball(cl.x, cl.y, r, cl.color, isStripe);
@@ -222,10 +252,16 @@ public class ScreenAnalyzer {
         // --- 5. Cue direction from the game's dashed white guide line ---
         float cueAngle = Float.NaN;
         if (state.cueBall != null) {
-            cueAngle = detectCueAngle(state.cueBall, ballR);
+            cueAngle = detectCueAngle(state, state.cueBall, ballR);
+        }
+        if (Float.isNaN(cueAngle)) {
+            cueMissFrames++;
+            if (cueMissFrames > 45) lastCueAngle = Float.NaN;
+        } else {
+            cueMissFrames = 0;
+            lastCueAngle = cueAngle;
         }
         state.cueAngle = Float.isNaN(cueAngle) ? lastCueAngle : cueAngle;
-        lastCueAngle = state.cueAngle;
 
         // --- 6. Compute lines ---
         computeLines(state, ballR);
@@ -233,9 +269,14 @@ public class ScreenAnalyzer {
         return state;
     }
 
-    private float detectCueAngle(GameState.Ball cue, float ballR) {
+    private float detectCueAngle(GameState state, GameState.Ball cue, float ballR) {
         float cxb = cue.x, cyb = cue.y;
         float searchR = ballR * 28f;
+        float minD2 = ballR * ballR * 4f;
+        float maxD2 = searchR * searchR;
+        float tableMinX = state.tableL + ballR, tableMaxX = state.tableR - ballR;
+        float tableMinY = state.tableT + ballR, tableMaxY = state.tableB - ballR;
+
         int minX = Math.max(0, (int) (cxb - searchR)), maxX = Math.min(outW, (int) (cxb + searchR));
         int minY = Math.max(0, (int) (cyb - searchR)), maxY = Math.min(outH, (int) (cyb + searchR));
 
@@ -244,22 +285,43 @@ public class ScreenAnalyzer {
         for (int yy = minY; yy < maxY; yy++) {
             for (int xx = minX; xx < maxX; xx++) {
                 int i = yy * outW + xx;
-                if (whiteMask[i]) {
-                    float dx = xx - cxb, dy = yy - cyb;
-                    float d2 = dx * dx + dy * dy;
-                    if (d2 > ballR * ballR * 4f && d2 < searchR * searchR) {
-                        float w = 1f / (1f + (float) Math.sqrt(d2) / ballR);
-                        wx += xx * w; wy += yy * w; wn++;
-                    }
+                if (!whiteMask[i]) continue;
+                float dx = xx - cxb, dy = yy - cyb;
+                float d2 = dx * dx + dy * dy;
+                if (d2 < minD2 || d2 > maxD2) continue;
+                // Ignore white pixels outside the playing field (cushions, UI)
+                if (xx < tableMinX || xx > tableMaxX || yy < tableMinY || yy > tableMaxY) continue;
+                // Ignore white pixels belonging to other balls (stripe bodies, white balls)
+                boolean inBall = false;
+                for (GameState.Ball b : state.balls) {
+                    if (b == cue) continue;
+                    float bx = xx - b.x, by = yy - b.y;
+                    float rr = b.r * 1.5f;
+                    if (bx * bx + by * by <= rr * rr) { inBall = true; break; }
                 }
+                if (inBall) continue;
+
+                float w = 1f / (1f + (float) Math.sqrt(d2) / ballR);
+                wx += xx * w; wy += yy * w; wn++;
             }
         }
-        if (wn >= 8) {
+        if (wn >= 6) {
             float mx = wx / wn, my = wy / wn;
-            float dx = mx - cxb, dy = my - cyb;
-            if (dx * dx + dy * dy > 0.1f) {
-                return (float) Math.atan2(dy, dx);
+            float angle = (float) Math.atan2(my - cyb, mx - cxb);
+
+            // Sanity: the aim direction must stay inside the table
+            float ux = (float) Math.cos(angle), uy = (float) Math.sin(angle);
+            float ahead = ballR * 6f;
+            float ax = cxb + ux * ahead, ay = cyb + uy * ahead;
+            if (ax < tableMinX || ax > tableMaxX || ay < tableMinY || ay > tableMaxY) return Float.NaN;
+
+            // Hysteresis: reject jumps > ~100 deg/frame (noise), keep last angle
+            if (!Float.isNaN(lastCueAngle)) {
+                float diff = Math.abs(angle - lastCueAngle);
+                diff = Math.min(diff, (float) (2f * Math.PI - diff));
+                if (diff > (float) (Math.PI * 0.55)) return Float.NaN;
             }
+            return angle;
         }
         return Float.NaN;
     }
