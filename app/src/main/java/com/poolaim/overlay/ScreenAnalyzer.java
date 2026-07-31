@@ -199,12 +199,12 @@ public class ScreenAnalyzer {
             boolean isStripe = false;
             if (cl.color != GameState.C_WHITE && cl.color != GameState.C_BLACK) {
                 int whiteCnt = 0;
-                int sr = (int) Math.max(1, r * 0.85f);
-                for (int sy = Math.max(0, (int)(cl.y - sr)); sy <= Math.min(outH - 1, (int)(cl.y + sr)); sy++) {
-                    for (int sx = Math.max(0, (int)(cl.x - sr)); sx <= Math.min(outW - 1, (int)(cl.x + sr)); sx++) {
-                        float dx = sx - cl.x, dy = sy - cl.y;
-                        if (dx * dx + dy * dy <= sr * sr) {
-                            if (whiteMask[sy * outW + sx]) whiteCnt++;
+                int searchRadius = (int) Math.max(1, r * 0.85f);
+                for (int stripeY = Math.max(0, (int)(cl.y - searchRadius)); stripeY <= Math.min(outH - 1, (int)(cl.y + searchRadius)); stripeY++) {
+                    for (int stripeX = Math.max(0, (int)(cl.x - searchRadius)); stripeX <= Math.min(outW - 1, (int)(cl.x + searchRadius)); stripeX++) {
+                        float dx = stripeX - cl.x, dy = stripeY - cl.y;
+                        if (dx * dx + dy * dy <= searchRadius * searchRadius) {
+                            if (whiteMask[stripeY * outW + stripeX]) whiteCnt++;
                         }
                     }
                 }
