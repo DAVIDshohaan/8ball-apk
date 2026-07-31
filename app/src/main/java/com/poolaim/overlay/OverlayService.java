@@ -315,7 +315,12 @@ public class OverlayService extends Service {
 
         private void drawHint(Canvas canvas, String msg) {
             textPaint.setTextAlign(Paint.Align.LEFT);
-            canvas.drawText(msg, 24f, getHeight() - 24f, textPaint);
+            float tw = textPaint.measureText(msg);
+            float ty = getHeight() - 24f;
+            fillPaint.setStyle(Paint.Style.FILL);
+            fillPaint.setColor(Color.argb(150, 0, 0, 0));
+            canvas.drawRoundRect(16f, ty - 44f, 16f + tw + 24f, ty + 12f, 8f, 8f, fillPaint);
+            canvas.drawText(msg, 24f, ty, textPaint);
         }
     }
 

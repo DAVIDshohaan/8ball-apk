@@ -475,9 +475,12 @@ public class ScreenAnalyzer {
             h = 0;
         }
 
-        // TEAL FELT (H≈196, S≈0.68, V≈0.72) — table background
-        // Range: H=170-205, S=0.25-0.90, V=0.35-0.95
+        // TEAL FELT (H≈196, S≈0.68, V≈0.72) — menu/lobby table
         if (h >= 170f && h <= 205f && s >= 0.25f && s <= 0.90f && v >= 0.35f && v <= 0.95f) return C_FELT;
+
+        // FELT GREEN (H≈140-150, S≈1.0, V≈0.3-0.8) — actual match table
+        // measured from live match screenshot: RGB(0,144,64) -> H=140-150
+        if (h >= 141f && h <= 168f && s >= 0.55f && v >= 0.22f && v <= 0.95f) return C_FELT;
 
         // WHITE (cue ball base H≈60 S≈0.13 V≈0.94, guide line, cushions)
         if (v > 0.85f && s < 0.40f) return GameState.C_WHITE;
@@ -500,8 +503,8 @@ public class ScreenAnalyzer {
         // RED (ball3 H≈356, ball11 H≈353): H=345-15 (wrap)
         if ((h >= 345f || h < 15f) && v > 0.55f) return GameState.C_RED;
 
-        // GREEN (ball6 H≈129, ball14 H≈130): H=115-145
-        if (h >= 115f && h <= 145f && v > 0.30f) return GameState.C_GREEN;
+        // GREEN (ball6 H≈129, ball14 H≈130): H=110-140 (felt green starts at 141)
+        if (h >= 110f && h <= 140f && v > 0.30f) return GameState.C_GREEN;
 
         // BLUE (ball2 H≈216, ball10 H≈216): H=205-230
         if (h >= 205f && h <= 230f && v > 0.40f) return GameState.C_BLUE;
