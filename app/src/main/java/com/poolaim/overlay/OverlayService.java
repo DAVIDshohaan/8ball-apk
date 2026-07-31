@@ -9,7 +9,6 @@ import android.content.Intent;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.DashPathEffect;
-import android.graphics.ImageFormat;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.RectF;
@@ -87,7 +86,7 @@ public class OverlayService extends Service {
             return START_NOT_STICKY;
         }
 
-        imageReader = ImageReader.newInstance(capW, capH, ImageFormat.YUV_420_888, 2);
+        imageReader = ImageReader.newInstance(capW, capH, PixelFormat.RGBA_8888, 2);
 
         analyzeThread = new HandlerThread("poolaim-analyzer");
         analyzeThread.start();

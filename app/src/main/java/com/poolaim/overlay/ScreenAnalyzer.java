@@ -36,27 +36,52 @@ public class ScreenAnalyzer {
         }
 
         // --- 1. Downsample + classify pixels ---
-        Image.Plane planeY = image.getPlanes()[0];
-        Image.Plane planeU = image.getPlanes()[1];
-        Image.Plane planeV = image.getPlanes()[2];
-        ByteBuffer by = planeY.getBuffer();
-        ByteBuffer bu = planeU.getBuffer();
-        ByteBuffer bv = planeV.getBuffer();
-        int sy = planeY.getRowStride(), su = planeU.getRowStride(), sv = planeV.getRowStride();
-        int psy = planeY.getPixelStride(), psu = planeU.getPixelStride(), psv = planeV.getPixelStride();
+        Image.Plane[] planes = image.getPlanes();
+        boolean rgba = planes.length == 1;
+        Image.Plane planeY = null, planeU = null, planeV = null;
+        ByteBuffer by = null, bu = null, bv = null;
+        int sy = 0, su = 0, sv = 0;
+        int psy = 0, psu = 0, psv = 0;
+        Image.Plane rgbaPlane = null;
+        ByteBuffer brgba = null;
+        int sr = 0, pr = 0;
+        if (rgba) {
+            rgbaPlane = planes[0];
+            brgba = rgbaPlane.getBuffer();
+            sr = rgbaPlane.getRowStride();
+            pr = rgbaPlane.getPixelStride();
+        } else {
+            planeY = planes[0];
+            planeU = planes[1];
+            planeV = planes[2];
+            by = planeY.getBuffer();
+            bu = planeU.getBuffer();
+            bv = planeV.getBuffer();
+            sy = planeY.getRowStride(); su = planeU.getRowStride(); sv = planeV.getRowStride();
+            psy = planeY.getPixelStride(); psu = planeU.getPixelStride(); psv = planeV.getPixelStride();
+        }
 
         for (int oy = 0; oy < outH; oy++) {
             int srcY = oy * imgH / outH;
             int oi = oy * outW;
             for (int ox = 0; ox < outW; ox++) {
                 int srcX = ox * imgW / outW;
-                int Y = (by.get(srcY * sy + srcX * psy) & 0xff);
-                int U = (bu.get((srcY / 2) * su + (srcX / 2) * psu) & 0xff) - 128;
-                int V = (bv.get((srcY / 2) * sv + (srcX / 2) * psv) & 0xff) - 128;
-                float r = clamp(Y + 1.402f * V);
-                float g = clamp(Y - 0.344f * U - 0.714f * V);
-                float b = clamp(Y + 1.772f * U);
-                int c = classify(r, g, b);
+                int c;
+                if (rgba) {
+                    int off = srcY * sr + srcX * pr;
+                    int r = brgba.get(off) & 0xff;
+                    int g = brgba.get(off + 1) & 0xff;
+                    int b = brgba.get(off + 2) & 0xff;
+                    c = classify(r, g, b);
+                } else {
+                    int Y = (by.get(srcY * sy + srcX * psy) & 0xff);
+                    int U = (bu.get((srcY / 2) * su + (srcX / 2) * psu) & 0xff) - 128;
+                    int V = (bv.get((srcY / 2) * sv + (srcX / 2) * psv) & 0xff) - 128;
+                    float r = clamp(Y + 1.402f * V);
+                    float g = clamp(Y - 0.344f * U - 0.714f * V);
+                    float b = clamp(Y + 1.772f * U);
+                    c = classify(r, g, b);
+                }
                 feltMask[oi] = (c == C_FELT);
                 whiteMask[oi] = (c == GameState.C_WHITE);
                 ballMask[oi] = (c >= 0 && c <= 8) ? (byte) (c + 1) : 0;
