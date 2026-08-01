@@ -83,10 +83,6 @@ public class OverlayService extends Service {
             startForeground(1, createNotification());
         }
 
-        displayManager = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
-        createCapture();
-        displayManager.registerDisplayListener(displayListener, analyzeHandler);
-
         MediaProjectionManager mpm =
                 (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
         mediaProjection = mpm.getMediaProjection(resultCode, data);
@@ -106,6 +102,10 @@ public class OverlayService extends Service {
         analyzeThread = new HandlerThread("poolaim-analyzer");
         analyzeThread.start();
         analyzeHandler = new Handler(analyzeThread.getLooper());
+
+        displayManager = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+        createCapture();
+        displayManager.registerDisplayListener(displayListener, analyzeHandler);
 
         overlayView = new OverlayView(this);
         showOverlay();
@@ -143,6 +143,7 @@ public class OverlayService extends Service {
             state.capH = capH;
             state.rotDeg = rotDeg;
         }
+        android.util.Log.i("PoolAim", "capture created " + capW + "x" + capH + " rot=" + rotDeg);
     }
 
     private void releaseCapture() {

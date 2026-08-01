@@ -1,6 +1,7 @@
 package com.poolaim.overlay;
 
 import android.media.Image;
+import android.util.Log;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -28,6 +29,17 @@ public class ScreenAnalyzer {
     private float lastCueAngle = Float.NaN;
     private int cueMissFrames = 0;
     private int[] stackBuf = new int[0];
+    private long frameNo = 0;
+
+    private int bestHueBin() {
+        int best = 0;
+        for (int i = 1; i < 36; i++) if (hueHist[i] > hueHist[best]) best = i;
+        return best;
+    }
+
+    private int maxHueBin() {
+        return bestHueBin() * 10;
+    }
 
     public GameState analyze(Image image, GameState state) {
         int imgW = image.getWidth();
@@ -117,6 +129,12 @@ public class ScreenAnalyzer {
             }
         }
 
+        if ((frameNo++ & 63) == 0) {
+            Log.i("PoolAim", String.format("buf %dx%d felt t=%d g=%d gd=%d b=%d a=%d hist=%d-%d",
+                    imgW, imgH, feltCounts[0], feltCounts[1], feltCounts[2], feltCounts[3],
+                    feltCounts[4], bestHueBin(), maxHueBin()));
+        }
+
         // Pick the dominant felt profile this frame (balls can never dominate)
         int bestBin = 0, bestCnt = 0;
         for (int i = 0; i < 36; i++) {
@@ -186,6 +204,7 @@ public class ScreenAnalyzer {
                 state.ghostY = -1;
                 state.aiming = false;
             }
+            Log.i("PoolAim", "no felt (n=" + n + ") table=false");
             return state;
         }
         cx /= n; cy /= n;
@@ -250,6 +269,8 @@ public class ScreenAnalyzer {
             state.tableB = Math.max(corners[0][1], Math.max(corners[1][1], Math.max(corners[2][1], corners[3][1])));
             state.tableFound = true;
         }
+        Log.i("PoolAim", String.format("TABLE found skin=%s felt=%.0f%% %dx%d l=%.0f t=%.0f r=%.0f b=%.0f",
+                SKIN_NAMES[winner], state.feltPct, outW, outH, state.tableL, state.tableT, state.tableR, state.tableB));
 
         // --- 4. Ball detection: flood fill on ball mask ---
         List<Cluster> clusters = new ArrayList<>();
