@@ -214,7 +214,13 @@ public class OverlayService extends Service {
     };
 
     private final ImageReader.OnImageAvailableListener frameListener = reader -> {
-        Image image = reader.acquireLatestImage();
+        Image image;
+        try {
+            image = reader.acquireLatestImage();
+        } catch (IllegalStateException e) {
+            Log.w("PoolAim", "acquireLatestImage failed: " + e.getMessage());
+            return;
+        }
         if (image == null) return;
         try {
             synchronized (state) {
@@ -229,8 +235,13 @@ public class OverlayService extends Service {
                     fpsWindowStart = now;
                 }
             }
+        } catch (IllegalStateException e) {
+            Log.w("PoolAim", "analyze skipped, buffer inaccessible: " + e.getMessage());
         } finally {
-            image.close();
+            try {
+                image.close();
+            } catch (IllegalStateException ignored) {
+            }
         }
         if (overlayView != null) {
             overlayView.postInvalidate();
