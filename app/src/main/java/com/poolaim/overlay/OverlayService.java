@@ -24,6 +24,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.util.DisplayMetrics;
+import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
 import android.view.View;
@@ -118,32 +119,64 @@ public class OverlayService extends Service {
      * is landscape (1612x720) the capture is landscape (806x360); if portrait,
      * portrait. This keeps the analyzer coordinates aligned with the physical
      * screen so drawn lines land exactly on the game.
+     *
+     * Android 14: releasing the last VirtualDisplay auto-stops the projection,
+     * so the NEW VirtualDisplay must be created BEFORE the old one is released.
+     * Android 16: creating a second VirtualDisplay on the same projection is
+     * forbidden ("Don't take multiple captures...") - on failure we KEEP the
+     * old capture untouched (projection stays alive, no crash) and just log.
      */
     private void createCapture() {
         Display display = windowManager.getDefaultDisplay();
         DisplayMetrics dm = new DisplayMetrics();
         display.getRealMetrics(dm);
-        capW = Math.max(1, dm.widthPixels / 2);
-        capH = Math.max(1, dm.heightPixels / 2);
+        int newW = Math.max(1, dm.widthPixels / 2);
+        int newH = Math.max(1, dm.heightPixels / 2);
         int rot = display.getRotation();
-        rotDeg = (rot == Surface.ROTATION_90) ? 90 : (rot == Surface.ROTATION_180) ? 180
+        int newRot = (rot == Surface.ROTATION_90) ? 90 : (rot == Surface.ROTATION_180) ? 180
                 : (rot == Surface.ROTATION_270) ? 270 : 0;
 
-        imageReader = ImageReader.newInstance(capW, capH, PixelFormat.RGBA_8888, 2);
+        ImageReader newReader = null;
+        VirtualDisplay newVd = null;
+        try {
+            newReader = ImageReader.newInstance(newW, newH, PixelFormat.RGBA_8888, 2);
+            newVd = mediaProjection.createVirtualDisplay(
+                    "poolaim-capture", newW, newH, dm.densityDpi,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    newReader.getSurface(), null, analyzeHandler);
+        } catch (Exception e) {
+            Log.e("PoolAim", "capture recreate failed: " + e.getMessage());
+            if (newReader != null) newReader.close();
+            if (imageReader == null && virtualDisplay == null) {
+                stopSelf();
+            } else {
+                Log.i("PoolAim", "keeping old capture " + capW + "x" + capH + " rot=" + rotDeg);
+            }
+            return;
+        }
 
-        virtualDisplay = mediaProjection.createVirtualDisplay(
-                "poolaim-capture", capW, capH, dm.densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader.getSurface(), null, analyzeHandler);
+        ImageReader oldReader = imageReader;
+        VirtualDisplay oldVd = virtualDisplay;
+        newReader.setOnImageAvailableListener(frameListener, analyzeHandler);
+        imageReader = newReader;
+        virtualDisplay = newVd;
 
-        imageReader.setOnImageAvailableListener(frameListener, analyzeHandler);
+        if (oldVd != null) oldVd.release();
+        if (oldReader != null) {
+            oldReader.setOnImageAvailableListener(null, null);
+            oldReader.close();
+        }
 
+        capW = newW;
+        capH = newH;
+        rotDeg = newRot;
         synchronized (state) {
             state.capW = capW;
             state.capH = capH;
             state.rotDeg = rotDeg;
         }
-        android.util.Log.i("PoolAim", "capture created " + capW + "x" + capH + " rot=" + rotDeg);
+        Log.i("PoolAim", "capture " + capW + "x" + capH + " rot=" + rotDeg
+                + (oldVd != null ? " recreated" : " created"));
     }
 
     private void releaseCapture() {
@@ -161,9 +194,13 @@ public class OverlayService extends Service {
     private final DisplayManager.DisplayListener displayListener = new DisplayManager.DisplayListener() {
         @Override
         public void onDisplayChanged(int displayId) {
-            if (displayId == Display.DEFAULT_DISPLAY && running) {
-                releaseCapture();
-                createCapture();
+            if (displayId == Display.DEFAULT_DISPLAY && running && imageReader != null) {
+                Display display = windowManager.getDefaultDisplay();
+                int rot = display.getRotation();
+                int newRot = (rot == Surface.ROTATION_90) ? 90
+                        : (rot == Surface.ROTATION_180) ? 180
+                        : (rot == Surface.ROTATION_270) ? 270 : 0;
+                if (newRot != rotDeg) createCapture();
             }
         }
 

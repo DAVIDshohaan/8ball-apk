@@ -29,6 +29,11 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // The overlay targets the game (always landscape). Forcing landscape
+        // here guarantees the capture buffer matches the game's orientation
+        // when the service starts, on ALL Android versions (Android 16 forbids
+        // recreating the VirtualDisplay on rotation, so we must start correct).
+        setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         setContentView(R.layout.activity_main);
         overlayActive = OverlayService.serviceAlive;
 
