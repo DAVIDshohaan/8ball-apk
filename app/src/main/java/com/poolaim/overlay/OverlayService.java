@@ -52,12 +52,24 @@ public class OverlayService extends Service {
     private final GameState state = new GameState();
     private boolean running = false;
 
+    private void trace(String msg) {
+        try {
+            java.io.File f = new java.io.File(getFilesDir(), "trace.txt");
+            java.io.FileWriter w = new java.io.FileWriter(f, true);
+            w.write(System.currentTimeMillis() + " [SVC] " + msg + "\n");
+            w.close();
+            Log.i("PoolAim", msg);
+        } catch (Exception e) { Log.e("PoolAim", "trace FAILED " + e); }
+    }
+
     private long frameCount = 0;
     private long fpsWindowStart = 0;
+    private long lastFrameTrace = 0;
 
     @Override
     public void onCreate() {
         super.onCreate();
+        trace("SVC onCreate");
         serviceAlive = true;
         windowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
         createNotificationChannel();
@@ -65,8 +77,11 @@ public class OverlayService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        trace("SVC onStartCommand running=" + running + " intent=" + (intent != null));
         if (running) return START_STICKY;
+        Log.i("PoolAim", "onStartCommand: running=" + running + " intent=" + (intent != null));
         if (intent == null || !intent.hasExtra("resultCode")) {
+            Log.e("PoolAim", "onStartCommand: STOP no resultCode extra");
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -74,23 +89,30 @@ public class OverlayService extends Service {
         int resultCode = intent.getIntExtra("resultCode", 0);
         Intent data = intent.getParcelableExtra("data");
         if (resultCode == 0 || data == null) {
+            Log.e("PoolAim", "onStartCommand: STOP resultCode=" + resultCode + " data=" + (data != null));
             stopSelf();
             return START_NOT_STICKY;
         }
 
+        trace("SVC startForeground about to call");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(1, createNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
         } else {
             startForeground(1, createNotification());
         }
+        trace("SVC startForeground called ok");
+        Log.i("PoolAim", "onStartCommand: startForeground called, starting projection");
 
         MediaProjectionManager mpm =
                 (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
         mediaProjection = mpm.getMediaProjection(resultCode, data);
+        trace("SVC got mediaProjection=" + (mediaProjection != null));
         if (mediaProjection == null) {
+            Log.e("PoolAim", "onStartCommand: STOP getMediaProjection returned null");
             stopSelf();
             return START_NOT_STICKY;
         }
+        Log.i("PoolAim", "onStartCommand: got MediaProjection, creating capture");
 
         mediaProjection.registerCallback(new MediaProjection.Callback() {
             @Override
@@ -105,11 +127,15 @@ public class OverlayService extends Service {
         analyzeHandler = new Handler(analyzeThread.getLooper());
 
         displayManager = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+        trace("SVC about to createCapture");
         createCapture();
+        trace("SVC createCapture done capW=" + capW);
         displayManager.registerDisplayListener(displayListener, analyzeHandler);
 
         overlayView = new OverlayView(this);
+        trace("SVC before showOverlay");
         showOverlay();
+        trace("SVC showOverlay done, running=true");
         running = true;
         return START_STICKY;
     }
@@ -145,9 +171,11 @@ public class OverlayService extends Service {
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     newReader.getSurface(), null, analyzeHandler);
         } catch (Exception e) {
+            trace("SVC capture recreate FAILED: " + e.getMessage());
             Log.e("PoolAim", "capture recreate failed: " + e.getMessage());
             if (newReader != null) newReader.close();
             if (imageReader == null && virtualDisplay == null) {
+                trace("SVC no old capture, stopping");
                 stopSelf();
             } else {
                 Log.i("PoolAim", "keeping old capture " + capW + "x" + capH + " rot=" + rotDeg);
@@ -194,13 +222,13 @@ public class OverlayService extends Service {
     private final DisplayManager.DisplayListener displayListener = new DisplayManager.DisplayListener() {
         @Override
         public void onDisplayChanged(int displayId) {
-            if (displayId == Display.DEFAULT_DISPLAY && running && imageReader != null) {
-                Display display = windowManager.getDefaultDisplay();
-                int rot = display.getRotation();
-                int newRot = (rot == Surface.ROTATION_90) ? 90
-                        : (rot == Surface.ROTATION_180) ? 180
-                        : (rot == Surface.ROTATION_270) ? 270 : 0;
-                if (newRot != rotDeg) createCapture();
+            // Android 14+ forbids creating a second VirtualDisplay on the same
+            // MediaProjection ("Don't take multiple captures..."), and doing so
+            // auto-stops the projection and kills the service. The game and this
+            // overlay are both landscape-fixed, so capture is only ever created
+            // once at service start; rotation changes are ignored on purpose.
+            if (displayId == Display.DEFAULT_DISPLAY && running) {
+                trace("SVC onDisplayChanged ignored (capture fixed once, A14 rule)");
             }
         }
 
@@ -234,6 +262,10 @@ public class OverlayService extends Service {
                     frameCount = 0;
                     fpsWindowStart = now;
                 }
+                if (now - lastFrameTrace > 5000) {
+                    lastFrameTrace = now;
+                    trace("SVC frames flowing fps=" + state.fps + " aiming=" + state.aiming + " balls=" + state.balls.size());
+                }
             }
         } catch (IllegalStateException e) {
             Log.w("PoolAim", "analyze skipped, buffer inaccessible: " + e.getMessage());
@@ -264,7 +296,9 @@ public class OverlayService extends Service {
                         WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 PixelFormat.TRANSLUCENT);
 
+        trace("SVC showOverlay addView (canDrawOverlays=" + android.provider.Settings.canDrawOverlays(this) + ")");
         windowManager.addView(overlayView, params);
+        trace("SVC showOverlay addView ok");
     }
 
     private void hideOverlay() {
@@ -282,6 +316,8 @@ public class OverlayService extends Service {
 
     @Override
     public void onDestroy() {
+        trace("SVC onDestroy");
+        Log.i("PoolAim", "onDestroy called (service stopping)");
         serviceAlive = false;
         running = false;
         hideOverlay();

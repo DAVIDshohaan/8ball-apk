@@ -194,7 +194,10 @@ Prefer single-file build during iteration. Full build only for the final verific
 
 When the user corrects your approach, append a one-line rule here before ending the session. Write it concretely ("Always use X for Y"), never abstractly ("be careful with Y"). If an existing line already covers the correction, tighten it instead of adding a new one. Remove lines when the underlying issue goes away (model upgrades, refactors, process changes).
 
-- (empty)
+- NEVER call createCapture()/createVirtualDisplay a second time on the same MediaProjection, even from DisplayManager.onDisplayChanged. Android 14+ throws "Don't take multiple captures" and auto-stops the projection, killing the service (~2.5s after start). Capture is fixed once at service start; ignore rotation events (game + overlay are landscape-fixed).
+- On this vivo device logcat often shows ZERO Log.i output from the app even though the code runs (logd drops/rotates). Do not trust `logcat -d -s PoolAim` for debugging; write breadcrumbs to getFilesDir()/trace.txt via run-as instead (app is debuggable).
+- A reinstall (`adb install -r`) resets SYSTEM_ALERT_WINDOW and START_FOREGROUND appops on this device; re-grant with `adb shell appops set com.poolaim.overlay <OP> allow` after each install, or startForegroundService fails silently.
+- Verify service survival with `dumpsys activity oom` (expect `prcp F/S/FGS`, NOT `cch-rec`/adj 900) and `dumpsys activity services com.poolaim.overlay` (expect `isForeground=true startForegroundCount=1`).
 
 ---
 
